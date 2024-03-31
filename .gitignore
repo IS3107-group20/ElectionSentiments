@@ -1,3 +1,5 @@
-airflow/logs/dag_processor_manager
-airflow/logs/scheduler
+airflow/logs/*
+!airflow/logs/.gitkeep
 airflow/.env
+**/__pycache__/
+*.pyc
