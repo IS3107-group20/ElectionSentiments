@@ -1,6 +1,7 @@
 from twikit import Client
 from airflow.decorators import dag, task
 import logging
+from airflow.models import Variable
 from datetime import datetime
 
 @dag(schedule_interval='@daily', start_date=datetime(2021, 1, 1), catchup=False)
@@ -14,9 +15,9 @@ def twitter_etl():
     @task
     def extract():
         # Enter your account information
-        USERNAME = '///'
-        EMAIL = '///'
-        PASSWORD = '///'
+        USERNAME = Variable.get('TWITTER_USERNAME')
+        EMAIL = Variable.get('TWITTER_EMAIL')
+        PASSWORD = Variable.get('TWITTER_PASSWORD')
 
         client = Client('en-US')
         client.login(
