@@ -2,4 +2,5 @@ airflow/logs/*
 !airflow/logs/.gitkeep
 airflow/.env
 **/__pycache__/
+airflow/secrets.json
 *.pyc
