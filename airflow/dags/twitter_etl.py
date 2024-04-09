@@ -1,8 +1,11 @@
 from twikit import Client
 from airflow.decorators import dag, task
 import logging
+from common.twitter_fn import _extract_tweets_n
 from airflow.models import Variable
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 @dag(schedule_interval='@daily', start_date=datetime(2021, 1, 1), catchup=False)
 def twitter_etl():
@@ -14,26 +17,19 @@ def twitter_etl():
 
     @task
     def extract():
-        # Enter your account information
-        USERNAME = Variable.get('TWITTER_USERNAME')
-        EMAIL = Variable.get('TWITTER_EMAIL')
-        PASSWORD = Variable.get('TWITTER_PASSWORD')
-
-        client = Client('en-US')
-        client.login(
-            auth_info_1=USERNAME,
-            auth_info_2=EMAIL,
-            password=PASSWORD
-        )
-        tweets = client.search_tweet('Trump', 'Top')
-        logging.info('Tweets extracted, count: %s', len(tweets))
-        for tweet in tweets:
-            logging.info('Tweet: %s', tweet)
-            logging.info('Tweet text: %s', tweet.text)
+        search_params = ['Trump', 'Biden', 'US Presidential Election']
+        tweets = []
+        for search in search_params:
+            tweets.append(_extract_tweets_n(20, search))
+        return tweets
+    
+    @task 
+    def transform(data: list):
         return 0
 
     task1 = print_hello()
     task2 = extract()
-    task1 >> task2
+    task3 = transform(task2)  
+    task1 >> task2 >> task3
 
 twitter_etl_dag = twitter_etl()
