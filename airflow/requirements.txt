@@ -1,2 +1,3 @@
 pandas
 twikit
+nltk
