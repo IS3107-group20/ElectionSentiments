@@ -1,6 +1,7 @@
 from airflow.decorators import dag, task
 from datetime import datetime, timedelta
 from airflow.providers.google.cloud.hooks.bigquery import BigQueryHook
+from google.cloud import bigquery
 import pandas as pd
 import praw
 import nltk
@@ -34,13 +35,12 @@ def reddit_scrape_etl_bigquery_incremental():
         
         for subreddit_name in subreddits:
             subreddit = reddit.subreddit(subreddit_name)
-            for post in subreddit.hot(limit=None):  # Fetch all posts
+            for post in subreddit.hot(limit=None):
                 all_posts.append([
                     post.title, post.score, post.id, str(post.subreddit), post.url,
-                    post.num_comments, post.selftext, datetime.fromtimestamp(post.created)
+                    post.num_comments, post.selftext, datetime.fromtimestamp(post.created).isoformat()
                 ])
         
-        # Create DataFrame from the list of posts
         df = pd.DataFrame(all_posts, columns=[
             'title', 'score', 'id', 'subreddit', 'url', 'num_comments', 'body', 'created'
         ])
@@ -51,7 +51,6 @@ def reddit_scrape_etl_bigquery_incremental():
         nltk.download('vader_lexicon')
         sia = SentimentIntensityAnalyzer()
 
-        # Function to determine the topic based on keywords in the content
         def determine_topic(content):
             trump_keywords = ['trump', 'donald', 'donald trump', 'president trump']
             biden_keywords = ['biden', 'joe', 'joe biden', 'president biden']
@@ -68,12 +67,10 @@ def reddit_scrape_etl_bigquery_incremental():
             else:
                 return 'None'
 
-        # Function to analyze the sentiment of the content
         def analyze_sentiment(text):
             sentiment_scores = sia.polarity_scores(text)
             return sentiment_scores['compound']
 
-        # Function to classify the sentiment based on the compound score
         def classify_sentiment(score):
             if score >= 0.05:
                 return 'Positive'
@@ -82,25 +79,48 @@ def reddit_scrape_etl_bigquery_incremental():
             else:
                 return 'Neutral'
 
-        # Apply the functions to process the DataFrame
         df['topic'] = df['body'].apply(determine_topic)
         df['sentiment_score'] = df['body'].apply(analyze_sentiment)
         df['sentiment'] = df['sentiment_score'].apply(classify_sentiment)
         
+        print(df.dtypes)
         return df
 
     @task
     def load_data_to_bigquery(df):
-        bigquery_conn_id = 'your_bigquery_connection'
-        dataset_table = 'reddit.reddit_scraped'
-        project_id = 'is3107-project-419009'
+        print(df.dtypes)  # Check data types before loading
+        df['score'] = pd.to_numeric(df['score'], errors='coerce').fillna(0).astype(int)
+        df['num_comments'] = pd.to_numeric(df['num_comments'], errors='coerce').fillna(0).astype(int)
 
-        # Append processed data to BigQuery table
-        df.to_gbq(
-            destination_table=dataset_table,        
-            project_id=project_id,
-            if_exists='append'
+        bigquery_conn_id = 'google_cloud_default'
+        dataset_table = 'reddit.reddit_scraped'
+
+        hook = BigQueryHook(bigquery_conn_id=bigquery_conn_id, use_legacy_sql=False)
+        credentials = hook.get_credentials()
+        client = bigquery.Client(credentials=credentials, project=hook.project_id)
+
+        job_config = bigquery.LoadJobConfig(
+            schema=[
+                bigquery.SchemaField("title", "STRING"),
+                bigquery.SchemaField("score", "INTEGER"),
+                bigquery.SchemaField("id", "STRING"),
+                bigquery.SchemaField("subreddit", "STRING"),
+                bigquery.SchemaField("url", "STRING"),
+                bigquery.SchemaField("num_comments", "INTEGER"),
+                bigquery.SchemaField("body", "STRING"),
+                bigquery.SchemaField("created", "STRING"),
+                bigquery.SchemaField("topic", "STRING"),
+                bigquery.SchemaField("sentiment_score", "FLOAT"),
+                bigquery.SchemaField("sentiment", "STRING"),
+            ],
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
         )
+
+        table_id = f"{hook.project_id}.{dataset_table}"
+        job = client.load_table_from_dataframe(df, table_id, job_config=job_config)
+        job.result()  # Wait for the load job to complete
+
+        print(f"Loaded {job.output_rows} rows into {table_id}")
 
     # Task dependencies and execution order
     raw_data = get_reddit_data()
