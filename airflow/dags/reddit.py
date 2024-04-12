@@ -51,7 +51,9 @@ def reddit_scrape_etl_bigquery_incremental():
         nltk.download('vader_lexicon')
         sia = SentimentIntensityAnalyzer()
 
-        def determine_topic(content):
+        def determine_topic(content, fallback):
+            if not content.strip():  # Fallback to title if body is empty
+                content = fallback
             trump_keywords = ['trump', 'donald', 'donald trump', 'president trump']
             biden_keywords = ['biden', 'joe', 'joe biden', 'president biden']
             content_lower = content.lower()
@@ -70,7 +72,7 @@ def reddit_scrape_etl_bigquery_incremental():
         def analyze_sentiment(text):
             sentiment_scores = sia.polarity_scores(text)
             return sentiment_scores['compound']
-
+        
         def classify_sentiment(score):
             if score >= 0.05:
                 return 'Positive'
@@ -79,7 +81,7 @@ def reddit_scrape_etl_bigquery_incremental():
             else:
                 return 'Neutral'
 
-        df['topic'] = df['body'].apply(determine_topic)
+        df['topic'] = df.apply(lambda row: determine_topic(row['body'], row['title']), axis=1)
         df['sentiment_score'] = df['body'].apply(analyze_sentiment)
         df['sentiment'] = df['sentiment_score'].apply(classify_sentiment)
         
