@@ -3,6 +3,8 @@ import re
 import pandas as pd
 import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
 from twikit import Client
 from airflow.models import Variable
 
@@ -54,6 +56,10 @@ def tweet_cleaning(tweet):
     return tweet
 
 def _transform_tweets(all_tweets):
+    # Geocoding
+    geolocater = Nominatim(user_agent = "ElectionSentiments")
+    geocode = RateLimiter(geolocater.geocode, min_delay_seconds = 1)
+    # Sentiment Analysis
     nltk.download('vader_lexicon')
     sia = SentimentIntensityAnalyzer()
     # Convert to dataframe
@@ -73,7 +79,8 @@ def _transform_tweets(all_tweets):
     tweets_df['cleaned_text'] = tweets_df['text'].apply(tweet_cleaning)
     tweets_df['sentiment_score'] = tweets_df['cleaned_text'].apply(analyze_sentiment)
     tweets_df['sentiment'] = tweets_df['sentiment_score'].apply(classify_sentiment)
-
+    tweets_df['point'] = tweets_df['country'].apply(geocode).apply(lambda loc: tuple(loc.point) if loc else None)
+    logger.info(tweets_df['country'])
     logger.info(tweets_df.dtypes)
     return tweets_df
 
