@@ -1,3 +1,10 @@
-pandas
-pip install apache-airflow-providers-google
-nltk
+pandas 
+matplotlib 
+seaborn 
+kaggle 
+reportlab 
+praw 
+nltk 
+geopy 
+twikit 
+pynytimes
