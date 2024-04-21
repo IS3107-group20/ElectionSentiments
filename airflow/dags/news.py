@@ -65,15 +65,15 @@ def news_scrape_etl_bigquery_incremental():
         bigquery_conn_id = 'google_cloud_default'
         hook = BigQueryHook(bigquery_conn_id=bigquery_conn_id, use_legacy_sql=False)
         client = bigquery.Client(credentials=hook.get_credentials(), project=hook.project_id)
-        query = "SELECT id FROM `is3107-project-419009.reddit.reddit_scraped`"
+        query = "SELECT checksum FROM `is3107-project-419009.reddit.news_scraped`"
         query_job = client.query(query)
         results = query_job.result()
-        existing_ids = {row.id for row in results}
+        existing_ids = {row.checksum for row in results}
         return existing_ids
 
     @task
     def filter_new_data(df, existing_ids):
-        new_data = df[~df['id'].isin(existing_ids)]
+        new_data = df[~df['checksum'].isin(existing_ids)]
         return new_data
 
     @task
