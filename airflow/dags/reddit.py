@@ -6,6 +6,9 @@ import pandas as pd
 import praw
 import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+import re
 
 # Default arguments for the DAG
 default_args = {
@@ -21,11 +24,11 @@ default_args = {
 @dag(dag_id='reddit_scrape', default_args=default_args, schedule_interval='@daily', catchup=False, tags=['reddit', 'bigquery'])
 def reddit_scrape_etl_bigquery_incremental():
 
-    # Function to create and return a new Reddit client
+    @task
     def get_reddit_client():
-        return praw.Reddit(client_id='9Vy8b4OZfZhDHn0bD4Q94w', 
-                           client_secret='h-JRuPyJJBWrWT8qnrt9PCL2V39RbA', 
-                           user_agent='is3107')
+        return praw.Reddit(client_id='your_client_id', 
+                           client_secret='your_client_secret', 
+                           user_agent='your_user_agent')
 
     @task
     def get_reddit_data():
@@ -47,27 +50,69 @@ def reddit_scrape_etl_bigquery_incremental():
         return df
 
     @task
+    def get_existing_ids():
+        bigquery_conn_id = 'google_cloud_default'
+        hook = BigQueryHook(bigquery_conn_id=bigquery_conn_id, use_legacy_sql=False)
+        client = bigquery.Client(credentials=hook.get_credentials(), project=hook.project_id)
+        query = "SELECT id FROM `is3107-project-419009.reddit.reddit_scraped`"
+        query_job = client.query(query)
+        results = query_job.result()
+        existing_ids = {row.id for row in results}
+        return existing_ids
+
+    @task
+    def filter_new_data(df, existing_ids):
+        new_data = df[~df['id'].isin(existing_ids)]
+        return new_data
+
+    @task
     def process_data(df):
         nltk.download('vader_lexicon')
+        nltk.download('wordnet')
+        nltk.download('stopwords')
+
+        # Initialize Sentiment Intensity Analyzer and Word Lemmatizer
         sia = SentimentIntensityAnalyzer()
+        lemmatizer = WordNetLemmatizer()
+        stop_words = set(stopwords.words('english'))
+
+        def clean_and_lemmatize(text):
+            text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+            text = re.sub(r'@\w+', '', text)
+            text = re.sub(r'#', '', text)
+            text = re.sub(r'RT[\s]+', '', text)
+            text = re.sub(r"[^a-zA-Z\s]", ' ', text)
+            text = re.sub(r'\s+', ' ', text).strip()
+            # Lemmatization
+            words = text.lower().split()
+            lemmatized_words = [lemmatizer.lemmatize(word) for word in words if word not in stop_words]
+            return ' '.join(lemmatized_words)
 
         def determine_topic(content, fallback):
-            if not content.strip():  # Fallback to title if body is empty
-                content = fallback
-            trump_keywords = ['trump', 'donald', 'donald trump', 'president trump']
-            biden_keywords = ['biden', 'joe', 'joe biden', 'president biden']
-            content_lower = content.lower()
-            trump_mentions = any(keyword in content_lower for keyword in trump_keywords)
-            biden_mentions = any(keyword in content_lower for keyword in biden_keywords)
+            trump_keywords = [
+                'trump', 'donald', 'donald trump', 'president trump', 'trump administration',
+                'trump campaign', 'trump era', 'ivanka', 'melania', 'trump policies', 'maga',
+                'make america great again', 'trump supporter', 'trump rally', 'trump impeachment'
+            ]
+            biden_keywords = [
+                'biden', 'joe', 'joe biden', 'president biden', 'biden administration',
+                'biden campaign', 'biden era', 'hunter biden', 'jill biden', 'biden policies',
+                'build back better', 'biden supporter', 'biden rally', 'biden impeachment'
+            ]
 
-            if trump_mentions and biden_mentions:
-                return 'Both'
-            elif trump_mentions:
+            if not content.strip():
+                content = fallback
+            
+            content_lower = content.lower()
+            trump_count = sum(content_lower.count(keyword) for keyword in trump_keywords)
+            biden_count = sum(content_lower.count(keyword) for keyword in biden_keywords)
+
+            if trump_count > biden_count:
                 return 'Trump'
-            elif biden_mentions:
+            elif biden_count > trump_count:
                 return 'Biden'
             else:
-                return 'None'
+                return 'Both' if trump_count > 0 else 'None'
 
         def analyze_sentiment(text):
             sentiment_scores = sia.polarity_scores(text)
@@ -81,16 +126,16 @@ def reddit_scrape_etl_bigquery_incremental():
             else:
                 return 'Neutral'
 
-        df['topic'] = df.apply(lambda row: determine_topic(row['body'], row['title']), axis=1)
-        df['sentiment_score'] = df['body'].apply(analyze_sentiment)
+        # apply to df
+        df['cleaned text'] = df.apply(lambda x: clean_and_lemmatize(x['title'] + " " + x['body']), axis=1)
+        df['topic'] = df.apply(lambda row: determine_topic(row['cleaned text'], row['title']), axis=1)
+        df['sentiment_score'] = df['cleaned text'].apply(analyze_sentiment)
         df['sentiment'] = df['sentiment_score'].apply(classify_sentiment)
-        
-        print(df.dtypes)
+
         return df
 
     @task
     def load_data_to_bigquery(df):
-        print(df.dtypes)  # Check data types before loading
         df['score'] = pd.to_numeric(df['score'], errors='coerce').fillna(0).astype(int)
         df['num_comments'] = pd.to_numeric(df['num_comments'], errors='coerce').fillna(0).astype(int)
 
@@ -120,14 +165,16 @@ def reddit_scrape_etl_bigquery_incremental():
 
         table_id = f"{hook.project_id}.{dataset_table}"
         job = client.load_table_from_dataframe(df, table_id, job_config=job_config)
-        job.result()  # Wait for the load job to complete
+        job.result()
 
         print(f"Loaded {job.output_rows} rows into {table_id}")
 
     # Task dependencies and execution order
     raw_data = get_reddit_data()
+    existing_ids = get_existing_ids()
     processed_data = process_data(raw_data)
-    load_data_to_bigquery(processed_data)
+    new_data = filter_new_data(processed_data, existing_ids)
+    load_data_to_bigquery(new_data)
 
 # Instantiate the DAG
 reddit_scrape_etl_bigquery_incremental_dag = reddit_scrape_etl_bigquery_incremental()

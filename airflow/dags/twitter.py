@@ -55,6 +55,22 @@ def twitter_scrape_etl_bigquery_incremental():
             if len(all_tweets) >= number_of_tweets:
                 break
         return all_tweets
+    
+    @task
+    def get_existing_ids():
+        bigquery_conn_id = 'google_cloud_default'
+        hook = BigQueryHook(bigquery_conn_id=bigquery_conn_id, use_legacy_sql=False)
+        client = bigquery.Client(credentials=hook.get_credentials(), project=hook.project_id)
+        query = "SELECT id FROM `is3107-project-419009.reddit.twitter_scraped`"
+        query_job = client.query(query)
+        results = query_job.result()
+        existing_ids = {row.id for row in results}
+        return existing_ids
+
+    @task
+    def filter_new_data(df, existing_ids):
+        new_data = df[~df['id'].isin(existing_ids)]
+        return new_data
 
     def tweet_cleaning(tweet):
         tweet = re.sub(r"http\S+|www\S+|https\S+", '', tweet, flags=re.MULTILINE)
@@ -124,7 +140,9 @@ def twitter_scrape_etl_bigquery_incremental():
     search_terms = ["election", "biden", "trump"]
     raw_data = extract_tweets_n(100, search_terms)
     processed_data = transform_tweets(raw_data)
-    load_data_to_bigquery(processed_data)
+    existing_ids = get_existing_ids()
+    new_data = filter_new_data(processed_data, existing_ids)
+    load_data_to_bigquery(new_data)
 
 # Instantiate the DAG
 twitter_scrape_etl_bigquery_incremental_dag = twitter_scrape_etl_bigquery_incremental()

@@ -36,7 +36,7 @@ def calculate_row_checksum(row):
         "retries": 1,
         "retry_delay": timedelta(minutes=5)
     },
-    schedule_interval=timedelta(weeks=1),
+    schedule_interval=timedelta(days=1),
     start_date=datetime(2024, 2, 28),
     dagrun_timeout=timedelta(minutes=5),
     catchup=False,
@@ -59,6 +59,22 @@ def news_scrape_etl_bigquery_incremental():
             results=10,
         )
         return articles
+    
+    @task
+    def get_existing_ids():
+        bigquery_conn_id = 'google_cloud_default'
+        hook = BigQueryHook(bigquery_conn_id=bigquery_conn_id, use_legacy_sql=False)
+        client = bigquery.Client(credentials=hook.get_credentials(), project=hook.project_id)
+        query = "SELECT id FROM `is3107-project-419009.reddit.reddit_scraped`"
+        query_job = client.query(query)
+        results = query_job.result()
+        existing_ids = {row.id for row in results}
+        return existing_ids
+
+    @task
+    def filter_new_data(df, existing_ids):
+        new_data = df[~df['id'].isin(existing_ids)]
+        return new_data
 
     @task
     def transform_into_csv(articles):
@@ -113,6 +129,8 @@ def news_scrape_etl_bigquery_incremental():
     news_data_trump = transform_into_csv(articles_trump)
     news_data_biden = transform_into_csv(articles_biden)
     news_df = combine_and_load(news_data_trump, news_data_biden)
-    load_data_to_bigquery(news_df)
+    existing_ids = get_existing_ids()
+    new_data = filter_new_data(news_df, existing_ids)
+    load_data_to_bigquery(new_data)
 
 news_scrape_etl_bigquery_incremental_dag = news_scrape_etl_bigquery_incremental()
