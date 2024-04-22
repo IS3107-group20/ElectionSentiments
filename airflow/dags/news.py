@@ -1,30 +1,81 @@
+import os
 from datetime import datetime, timedelta
 from airflow.decorators import dag, task
 from pynytimes import NYTAPI
 import pandas as pd
 import hashlib
+import json
+import re
 from google.cloud import bigquery
 from airflow.providers.google.cloud.hooks.bigquery import BigQueryHook
-import os
-from dotenv import load_dotenv
-import json
-import hashlib
-from datetime import datetime
+import nltk
+from nltk.sentiment import SentimentIntensityAnalyzer
 
-load_dotenv()
-apikey = "jp8j36ahTYcAE3AskMXyvOH0Gx9nrmch"
+apikey = "jp8j36ahTYcAE3AskMXyvOH0Gx9nrmch" 
+
+nltk.download('vader_lexicon')
+sia = SentimentIntensityAnalyzer()
 
 def json_serial(obj):
     """JSON serializer for objects not serializable by default json code"""
     if isinstance(obj, datetime):
-        return obj.isoformat()  # Convert datetime to ISO format string
-    raise TypeError ("Type not serializable")
+        return obj.isoformat()
+    raise TypeError("Type not serializable")
 
 def calculate_row_checksum(row):
-    # Use json.dumps with a default handler for non-serializable data
+    """Calculate a checksum for a row to identify unique articles"""
     row_str = json.dumps(row, default=json_serial, sort_keys=True)
     checksum = hashlib.md5(row_str.encode()).hexdigest()
     return checksum
+
+def clean_text(text):
+    """Clean text by removing URLs, special characters, and normalizing whitespace"""
+    text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'@\w+', '', text)
+    text = re.sub(r'#', '', text)
+    text = re.sub(r'RT[\s]+', '', text)
+    text = re.sub(r"[^a-zA-Z\s]", ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip().lower()
+    return text
+
+def classify_topic(keywords_str):
+    # Normalize the string by converting to lowercase and splitting on semicolon
+    # and strip spaces to ensure consistent keyword matching.
+    keywords_list = [keyword.strip().lower() for keyword in keywords_str.split(';')]
+    
+    trump_keywords = {
+        'trump', 'donald', 'donald trump', 'president trump', 'trump administration',
+        'trump campaign', 'trump era', 'ivanka', 'melania', 'trump policies', 'maga',
+        'make america great again', 'trump supporter', 'trump rally', 'trump impeachment'
+    }
+    biden_keywords = {
+        'biden', 'joe', 'joe biden', 'president biden', 'biden administration',
+        'biden campaign', 'biden era', 'hunter biden', 'jill biden', 'biden policies',
+        'build back better', 'biden supporter', 'biden rally', 'biden impeachment'
+    }
+
+    # Simplified keyword matching for broader matches
+    trump_count = sum(any(tk in keyword for tk in trump_keywords) for keyword in keywords_list)
+    biden_count = sum(any(bk in keyword for bk in biden_keywords) for keyword in keywords_list)
+
+    if trump_count > biden_count:
+        return 'Trump'
+    elif biden_count > trump_count:
+        return 'Biden'
+    return 'Both' if trump_count > 0 and biden_count > 0 else 'None'
+
+def analyze_sentiment(text):
+    """Analyze the sentiment of the text and return the compound sentiment score"""
+    return sia.polarity_scores(text)['compound']
+
+def classify_sentiment(score):
+        if score >= 0.05:
+            return 'Positive'
+        elif score <= -0.05:
+            return 'Negative'
+        else:
+            return 'Neutral'
+
 @dag(
     dag_id="news_dag",
     default_args={
@@ -40,8 +91,8 @@ def calculate_row_checksum(row):
     start_date=datetime(2024, 2, 28),
     dagrun_timeout=timedelta(minutes=5),
     catchup=False,
-    tags=["news_dag"],
-    description="DAG to scrape and retrieve data from news API"
+    tags=["news"],
+    description="DAG to scrape and retrieve data from news API and load to BigQuery"
 )
 def news_scrape_etl_bigquery_incremental():
 
@@ -51,14 +102,30 @@ def news_scrape_etl_bigquery_incremental():
         start_date = datetime.now() - timedelta(days=7)
         articles = nytapi.article_search(
             query=query,
-            options={
-                "sort": "relevance",
-                "sources": ["New York Times", "AP", "Reuters", "International Herald Tribune"],
-            },
+            options={"sort": "relevance", "sources": ["New York Times", "AP", "Reuters", "International Herald Tribune"]},
             dates={"begin": start_date, "end": datetime.now()},
             results=10,
         )
         return articles
+
+    @task
+    def transform_into_csv(articles):
+        data = {
+            "headline": [article["headline"]["main"] for article in articles],
+            "author": [article["headline"]["kicker"] for article in articles],
+            "lead_paragraph": [article["lead_paragraph"] for article in articles],
+            "snippet": [article["snippet"] for article in articles],
+            "source": [article["source"] for article in articles],
+            "publication_date": [article["pub_date"] for article in articles],
+            "keywords": ["; ".join(keyword["value"] for keyword in article["keywords"]) for article in articles],
+            "cleaned_text": [clean_text(article["headline"]["main"] + " " + article["lead_paragraph"] + " " + article["snippet"]) for article in articles],
+            "sentiment_score": [analyze_sentiment(clean_text(article["headline"]["main"] + " " + article["lead_paragraph"] + " " + article["snippet"])) for article in articles],
+            "checksum": [calculate_row_checksum(article) for article in articles]
+        }
+        df = pd.DataFrame(data)
+        df['sentiment'] = df['sentiment_score'].apply(classify_sentiment)
+        df['topic'] = df['keywords'].apply(classify_topic)
+        return df
     
     @task
     def get_existing_ids():
@@ -73,23 +140,7 @@ def news_scrape_etl_bigquery_incremental():
 
     @task
     def filter_new_data(df, existing_ids):
-        new_data = df[~df['checksum'].isin(existing_ids)]
-        return new_data
-
-    @task
-    def transform_into_csv(articles):
-        data = {
-            "headline": [article["headline"]["main"] for article in articles],
-            "author": [article["headline"]["kicker"] for article in articles],
-            "lead_paragraph": [article["lead_paragraph"] for article in articles],
-            "snippet": [article["snippet"] for article in articles],
-            "source": [article["source"] for article in articles],
-            "publication_date": [article["pub_date"] for article in articles],
-            "keywords": ["; ".join(keyword["value"] for keyword in article["keywords"]) for article in articles],
-            "checksum": [calculate_row_checksum(article) for article in articles]
-        }
-        df = pd.DataFrame(data)
-        return df
+        return df[~df['checksum'].isin(existing_ids)]
 
     @task
     def load_data_to_bigquery(df):
@@ -108,7 +159,10 @@ def news_scrape_etl_bigquery_incremental():
                 bigquery.SchemaField("source", "STRING"),
                 bigquery.SchemaField("publication_date", "DATE"),
                 bigquery.SchemaField("keywords", "STRING"),
-                bigquery.SchemaField("checksum", "STRING", description="Primary Key")
+                bigquery.SchemaField("topic", "STRING"),
+                bigquery.SchemaField("checksum", "STRING", description="Primary Key"),
+                bigquery.SchemaField("cleaned_text", "STRING"),
+                bigquery.SchemaField("sentiment_score", "FLOAT")
             ],
             write_disposition=bigquery.WriteDisposition.WRITE_APPEND
         )
@@ -117,20 +171,18 @@ def news_scrape_etl_bigquery_incremental():
         job = client.load_table_from_dataframe(df, table_ref, job_config=job_config)
         job.result()
         print(f"Loaded {job.output_rows} rows into {table_ref}")
-
-    # Combine data and load to BigQuery
+        
     @task
     def combine_and_load(df1, df2):
         return pd.concat([df1, df2], axis=0)
 
-    # Task chaining should be done using outputs of previous tasks
     articles_trump = get_nyt_articles_weekly("trump")
     articles_biden = get_nyt_articles_weekly("biden")
     news_data_trump = transform_into_csv(articles_trump)
     news_data_biden = transform_into_csv(articles_biden)
     news_df = combine_and_load(news_data_trump, news_data_biden)
-    existing_ids = get_existing_ids()
-    new_data = filter_new_data(news_df, existing_ids)
-    load_data_to_bigquery(new_data)
+    # existing_ids = get_existing_ids()
+    # new_data = filter_new_data(news_df, existing_ids)
+    load_data_to_bigquery(news_df)
 
 news_scrape_etl_bigquery_incremental_dag = news_scrape_etl_bigquery_incremental()
