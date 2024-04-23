@@ -161,6 +161,28 @@ def reddit_scrape_etl_bigquery_incremental():
             return row['topic']
 
         df['topic'] = df.apply(update_topic_based_on_aspects, axis=1)
+        # def get_max_sentiment(sentiments):
+        #     max_sentiment = max(sentiments, key=sentiments.get)
+        #     max_score = sentiments[max_sentiment]
+        #     return max_sentiment, max_score
+
+        # new_rows = []
+
+        # for index, row in df.iterrows():
+        #     if row['topic'] == 'Both':
+        #         for aspect, sentiments in row['aspect_sentiments'].items():
+        #             max_sentiment, max_score = get_max_sentiment(sentiments)
+        #             new_row = row.copy()
+        #             new_row['topic'] = aspect
+        #             new_row['sentiment'] = max_sentiment
+        #             new_row['sentiment_score'] = max_score
+        #             new_rows.append(new_row)
+        #     else:
+        #         new_rows.append(row)
+
+        # new_df = pd.DataFrame(new_rows)
+
+        # new_df = new_df.reset_index(drop=True)
 
         return df
 
