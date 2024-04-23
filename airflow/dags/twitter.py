@@ -9,6 +9,8 @@ from nltk.sentiment import SentimentIntensityAnalyzer
 import re
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+import torch.nn.functional as F
 
 # Default arguments for the DAG
 default_args = {
@@ -110,6 +112,21 @@ def twitter_scrape_etl_bigquery_incremental():
             elif biden_count > trump_count:
                 return 'Biden'
             return 'Both' if trump_count > 0 and biden_count > 0 else 'None'
+        
+        absa_tokenizer = AutoTokenizer.from_pretrained("yangheng/deberta-v3-base-absa-v1.1")
+        absa_model = AutoModelForSequenceClassification.from_pretrained("yangheng/deberta-v3-base-absa-v1.1")
+        
+        def extract_aspects(text):
+            aspects = ['trump', 'biden'] 
+            aspect_sentiments = {}
+            if text.strip():
+                for aspect in aspects:
+                    inputs = absa_tokenizer(f"[CLS] {text} [SEP] {aspect} [SEP]", return_tensors="pt")
+                    outputs = absa_model(**inputs)
+                    probs = F.softmax(outputs.logits, dim=1)
+                    probs = probs.detach().numpy()[0]
+                    aspect_sentiments[aspect] = {label: prob for prob, label in zip(probs, ["negative", "neutral", "positive"])}
+            return aspect_sentiments
 
         tweets_df = pd.DataFrame(all_tweets)
         tweets_df['cleaned_text'] = tweets_df['text'].apply(tweet_cleaning)
@@ -117,6 +134,18 @@ def twitter_scrape_etl_bigquery_incremental():
         tweets_df['sentiment_score'] = tweets_df['cleaned_text'].apply(lambda text: sia.polarity_scores(text)['compound'])
         tweets_df['sentiment'] = tweets_df['sentiment_score'].apply(lambda score: 'Positive' if score >= 0.05 else 'Negative' if score <= -0.05 else 'Neutral')
         tweets_df['point'] = tweets_df['country'].apply(geocode).apply(lambda loc: f"POINT({loc.longitude} {loc.latitude})" if loc else None)
+
+        # Update topics based on aspect sentiments
+        def update_topic_based_on_aspects(row):
+            if row['topic'] == 'Both':
+                aspect_results = []
+                for aspect, sentiments in row['aspect_sentiments'].items():
+                    most_likely_sentiment = max(sentiments, key=sentiments.get)
+                    aspect_results.append(f"{aspect}: {most_likely_sentiment}")
+                return ', '.join(aspect_results)
+            return row['topic']
+
+        tweets_df['topic'] = tweets_df.apply(update_topic_based_on_aspects, axis=1)
 
         return tweets_df
 
@@ -136,6 +165,7 @@ def twitter_scrape_etl_bigquery_incremental():
             bigquery.SchemaField("reply_count", "INTEGER"),
             bigquery.SchemaField("country", "STRING"),
             bigquery.SchemaField("cleaned_text", "STRING"),
+            bigquery.SchemaField("topic", "STRING"),
             bigquery.SchemaField("sentiment_score", "FLOAT"),
             bigquery.SchemaField("sentiment", "STRING"),
             bigquery.SchemaField("point", "GEOGRAPHY"),

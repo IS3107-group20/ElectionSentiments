@@ -10,6 +10,8 @@ from google.cloud import bigquery
 from airflow.providers.google.cloud.hooks.bigquery import BigQueryHook
 import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+import torch.nn.functional as F
 
 apikey = "jp8j36ahTYcAE3AskMXyvOH0Gx9nrmch" 
 
@@ -122,9 +124,38 @@ def news_scrape_etl_bigquery_incremental():
             "sentiment_score": [analyze_sentiment(clean_text(article["headline"]["main"] + " " + article["lead_paragraph"] + " " + article["snippet"])) for article in articles],
             "checksum": [calculate_row_checksum(article) for article in articles]
         }
+        
+        absa_tokenizer = AutoTokenizer.from_pretrained("yangheng/deberta-v3-base-absa-v1.1")
+        absa_model = AutoModelForSequenceClassification.from_pretrained("yangheng/deberta-v3-base-absa-v1.1")
+        
+        def extract_aspects(text):
+            aspects = ['trump', 'biden'] 
+            aspect_sentiments = {}
+            if text.strip():
+                for aspect in aspects:
+                    inputs = absa_tokenizer(f"[CLS] {text} [SEP] {aspect} [SEP]", return_tensors="pt")
+                    outputs = absa_model(**inputs)
+                    probs = F.softmax(outputs.logits, dim=1)
+                    probs = probs.detach().numpy()[0]
+                    aspect_sentiments[aspect] = {label: prob for prob, label in zip(probs, ["negative", "neutral", "positive"])}
+            return aspect_sentiments
+        
         df = pd.DataFrame(data)
         df['sentiment'] = df['sentiment_score'].apply(classify_sentiment)
         df['topic'] = df['keywords'].apply(classify_topic)
+        
+        # Update topics based on aspect sentiments
+        def update_topic_based_on_aspects(row):
+            if row['topic'] == 'Both':
+                aspect_results = []
+                for aspect, sentiments in row['aspect_sentiments'].items():
+                    most_likely_sentiment = max(sentiments, key=sentiments.get)
+                    aspect_results.append(f"{aspect}: {most_likely_sentiment}")
+                return ', '.join(aspect_results)
+            return row['topic']
+        
+        df['topic'] = df.apply(update_topic_based_on_aspects, axis=1)
+        
         return df
     
     @task
@@ -162,7 +193,8 @@ def news_scrape_etl_bigquery_incremental():
                 bigquery.SchemaField("topic", "STRING"),
                 bigquery.SchemaField("checksum", "STRING", description="Primary Key"),
                 bigquery.SchemaField("cleaned_text", "STRING"),
-                bigquery.SchemaField("sentiment_score", "FLOAT")
+                bigquery.SchemaField("sentiment_score", "FLOAT"),
+                bigquery.SchemaField("sentiment", "STRING"),
             ],
             write_disposition=bigquery.WriteDisposition.WRITE_APPEND
         )
@@ -181,8 +213,8 @@ def news_scrape_etl_bigquery_incremental():
     news_data_trump = transform_into_csv(articles_trump)
     news_data_biden = transform_into_csv(articles_biden)
     news_df = combine_and_load(news_data_trump, news_data_biden)
-    # existing_ids = get_existing_ids()
-    # new_data = filter_new_data(news_df, existing_ids)
-    load_data_to_bigquery(news_df)
+    existing_ids = get_existing_ids()
+    new_data = filter_new_data(news_df, existing_ids)
+    load_data_to_bigquery(new_data)
 
 news_scrape_etl_bigquery_incremental_dag = news_scrape_etl_bigquery_incremental()

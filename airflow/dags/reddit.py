@@ -9,6 +9,8 @@ from nltk.sentiment import SentimentIntensityAnalyzer
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 import re
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+import torch.nn.functional as F
 
 # Default arguments for the DAG
 default_args = {
@@ -24,11 +26,10 @@ default_args = {
 @dag(dag_id='reddit_scrape', default_args=default_args, schedule_interval='@daily', catchup=False, tags=['reddit', 'bigquery'])
 def reddit_scrape_etl_bigquery_incremental():
 
-    @task
     def get_reddit_client():
-        return praw.Reddit(client_id='your_client_id', 
-                           client_secret='your_client_secret', 
-                           user_agent='your_user_agent')
+        return praw.Reddit(client_id='9Vy8b4OZfZhDHn0bD4Q94w', 
+                           client_secret='h-JRuPyJJBWrWT8qnrt9PCL2V39RbA', 
+                           user_agent='is3107')
 
     @task
     def get_reddit_data():
@@ -75,7 +76,7 @@ def reddit_scrape_etl_bigquery_incremental():
         sia = SentimentIntensityAnalyzer()
         lemmatizer = WordNetLemmatizer()
         stop_words = set(stopwords.words('english'))
-
+        
         def clean_and_lemmatize(text):
             text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
             text = re.sub(r'@\w+', '', text)
@@ -125,12 +126,41 @@ def reddit_scrape_etl_bigquery_incremental():
                 return 'Negative'
             else:
                 return 'Neutral'
+        
+        absa_tokenizer = AutoTokenizer.from_pretrained("yangheng/deberta-v3-base-absa-v1.1")
+        absa_model = AutoModelForSequenceClassification.from_pretrained("yangheng/deberta-v3-base-absa-v1.1")
+        
+        def extract_aspects(text):
+            aspects = ['trump', 'biden'] 
+            aspect_sentiments = {}
+            if text.strip():
+                for aspect in aspects:
+                    inputs = absa_tokenizer(f"[CLS] {text} [SEP] {aspect} [SEP]", return_tensors="pt")
+                    outputs = absa_model(**inputs)
+                    probs = F.softmax(outputs.logits, dim=1)
+                    probs = probs.detach().numpy()[0]
+                    aspect_sentiments[aspect] = {label: prob for prob, label in zip(probs, ["negative", "neutral", "positive"])}
+            return aspect_sentiments
+
 
         # apply to df
         df['cleaned text'] = df.apply(lambda x: clean_and_lemmatize(x['title'] + " " + x['body']), axis=1)
         df['topic'] = df.apply(lambda row: determine_topic(row['cleaned text'], row['title']), axis=1)
         df['sentiment_score'] = df['cleaned text'].apply(analyze_sentiment)
+        df['aspect_sentiments'] = df['cleaned text'].apply(extract_aspects)
         df['sentiment'] = df['sentiment_score'].apply(classify_sentiment)
+
+        # Update topics based on aspect sentiments
+        def update_topic_based_on_aspects(row):
+            if row['topic'] == 'Both':
+                aspect_results = []
+                for aspect, sentiments in row['aspect_sentiments'].items():
+                    most_likely_sentiment = max(sentiments, key=sentiments.get)
+                    aspect_results.append(f"{aspect}: {most_likely_sentiment}")
+                return ', '.join(aspect_results)
+            return row['topic']
+
+        df['topic'] = df.apply(update_topic_based_on_aspects, axis=1)
 
         return df
 
@@ -157,6 +187,7 @@ def reddit_scrape_etl_bigquery_incremental():
                 bigquery.SchemaField("body", "STRING"),
                 bigquery.SchemaField("created", "STRING"),
                 bigquery.SchemaField("topic", "STRING"),
+                bigquery.SchemaField("cleaned_text", "STRING"),
                 bigquery.SchemaField("sentiment_score", "FLOAT"),
                 bigquery.SchemaField("sentiment", "STRING"),
             ],

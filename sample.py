@@ -64,7 +64,7 @@ def process_data(df):
     df['sentiment'] = df['sentiment_score'].apply(lambda score: 'Positive' if score >= 0.05 else ('Negative' if score <= -0.05 else 'Neutral'))
 
     def extract_aspects(text):
-        aspects = ['food', 'service', 'price']  # Define or dynamically determine aspects
+        aspects = ['trump', 'biden'] 
         aspect_sentiments = {}
         if text.strip():
             for aspect in aspects:
@@ -76,13 +76,13 @@ def process_data(df):
         return aspect_sentiments
 
     df['aspect_sentiments'] = df['cleaned text'].apply(extract_aspects)
-    print(df['aspect_sentiments'][:5])
     return df
 
 # Define the main function to retrieve and process data
 def main():
     df = get_reddit_data()
     processed_data = process_data(df)
+    processed_data.to_csv('processed_reddit_data.csv', index=False)
     return processed_data
 
 if __name__ == "__main__":
