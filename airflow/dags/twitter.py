@@ -87,9 +87,33 @@ def twitter_scrape_etl_bigquery_incremental():
         geocode = RateLimiter(geolocater.geocode, min_delay_seconds=1)
         nltk.download('vader_lexicon')
         sia = SentimentIntensityAnalyzer()
+        
+        trump_keywords = [
+        'trump', 'donald', 'donald trump', 'president trump', 'trump administration',
+        'trump campaign', 'trump era', 'ivanka', 'melania', 'trump policies', 'maga',
+        'make america great again', 'trump supporter', 'trump rally', 'trump impeachment'
+        ]
+        
+        biden_keywords = [
+            'biden', 'joe', 'joe biden', 'president biden', 'biden administration',
+            'biden campaign', 'biden era', 'hunter biden', 'jill biden', 'biden policies',
+            'build back better', 'biden supporter', 'biden rally', 'biden impeachment'
+        ]
+
+        def classify_topic(text):
+            text_lower = text.lower()
+            trump_count = sum(text_lower.count(keyword) for keyword in trump_keywords)
+            biden_count = sum(text_lower.count(keyword) for keyword in biden_keywords)
+
+            if trump_count > biden_count:
+                return 'Trump'
+            elif biden_count > trump_count:
+                return 'Biden'
+            return 'Both' if trump_count > 0 and biden_count > 0 else 'None'
 
         tweets_df = pd.DataFrame(all_tweets)
         tweets_df['cleaned_text'] = tweets_df['text'].apply(tweet_cleaning)
+        tweets_df['topic'] = tweets_df['cleaned_text'].apply(classify_topic)
         tweets_df['sentiment_score'] = tweets_df['cleaned_text'].apply(lambda text: sia.polarity_scores(text)['compound'])
         tweets_df['sentiment'] = tweets_df['sentiment_score'].apply(lambda score: 'Positive' if score >= 0.05 else 'Negative' if score <= -0.05 else 'Neutral')
         tweets_df['point'] = tweets_df['country'].apply(geocode).apply(lambda loc: f"POINT({loc.longitude} {loc.latitude})" if loc else None)
