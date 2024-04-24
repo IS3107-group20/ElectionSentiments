@@ -171,7 +171,7 @@ def reddit_scrape_etl_bigquery_incremental():
                 new_rows.append(row)
 
         new_df = pd.DataFrame(new_rows)
-
+        new_df = new_df.drop('aspect_sentiments', axis = 1)
         new_df = new_df.reset_index(drop=True)
 
         return new_df
