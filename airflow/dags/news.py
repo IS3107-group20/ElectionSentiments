@@ -158,7 +158,7 @@ def news_scrape_etl_bigquery_incremental():
                 for aspect, sentiments in row['aspect_sentiments'].items():
                     max_sentiment, max_score = get_max_sentiment(sentiments)
                     new_row = row.copy()
-                    new_row['topic'] = aspect
+                    new_row['topic'] = 'Trump' if aspect == 'trump' else 'Biden'
                     new_row['sentiment'] = max_sentiment
                     new_row['sentiment_score'] = max_score
                     new_rows.append(new_row)
