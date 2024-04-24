@@ -143,6 +143,7 @@ def news_scrape_etl_bigquery_incremental():
         df = pd.DataFrame(data)
         df['sentiment'] = df['sentiment_score'].apply(classify_sentiment)
         df['topic'] = df['keywords'].apply(classify_topic)
+        df['aspect_sentiments'] = df['cleaned_text'].apply(extract_aspects)
         
         # Update topics based on aspect sentiments
         def get_max_sentiment(sentiments):

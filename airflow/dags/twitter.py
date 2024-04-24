@@ -134,6 +134,7 @@ def twitter_scrape_etl_bigquery_incremental():
         tweets_df['sentiment_score'] = tweets_df['cleaned_text'].apply(lambda text: sia.polarity_scores(text)['compound'])
         tweets_df['sentiment'] = tweets_df['sentiment_score'].apply(lambda score: 'Positive' if score >= 0.05 else 'Negative' if score <= -0.05 else 'Neutral')
         tweets_df['point'] = tweets_df['country'].apply(geocode).apply(lambda loc: f"POINT({loc.longitude} {loc.latitude})" if loc else None)
+        tweets_df['aspect_sentiments'] = tweets_df['cleaned_text'].apply(extract_aspects)
 
         # Update topics based on aspect sentiments
         def get_max_sentiment(sentiments):
