@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from airflow.providers.google.cloud.hooks.bigquery import BigQueryHook
 from google.cloud import bigquery
 import nltk
+import logging
 from nltk.sentiment import SentimentIntensityAnalyzer
 import re
 from geopy.geocoders import Nominatim
@@ -26,37 +27,70 @@ default_args = {
 @dag(dag_id='twitter_scrape', default_args=default_args, schedule_interval='@daily', catchup=False, tags=['twitter', 'bigquery'])
 def twitter_scrape_etl_bigquery_incremental():
     
-    @task
-    def extract_tweets_n(number_of_tweets: int, search_terms: list):
-        from twikit import Client
-        client = Client('en-US')
-        client.login(
-        auth_info_1="ispet797655",
-        auth_info_2="isthreeone994@gmail.com.",
-        password="123abc456def")
+    # @task
+    # def extract_tweets_n(number_of_tweets: int, search_terms: list):
+    #     from twikit import Client
+    #     #Change Credentials
+    #     client = Client('en-US')
+    #     client.login(
+    #     auth_info_1="ispet797655",
+    #     auth_info_2="isthreeone994@gmail.com.",
+    #     password="123abc456def")
         
-        all_tweets = []
-        for term in search_terms:
-            tweets = client.search_tweet(term, 'Latest')
-            for tweet in tweets:
-                if len(all_tweets) < number_of_tweets:
-                    curr_tweet = {
-                        'id': tweet.id,
-                        'text': tweet.text,
-                        'lang': tweet.lang,
-                        'created_at_datetime': tweet.created_at_datetime,
-                        'user': tweet.user.screen_name,
-                        'quote_count': tweet.quote_count,
-                        'favorite_count': tweet.favorite_count,
-                        'reply_count': tweet.reply_count,
-                        'country' : tweet.user.location
-                    }
-                    all_tweets.append(curr_tweet)
-                else:
-                    break
-            if len(all_tweets) >= number_of_tweets:
-                break
-        return all_tweets
+    #     all_tweets = []
+    #     for term in search_terms:
+    #         tweets = client.search_tweet(term, 'Top')
+    #         topic_tweets=[]
+    #         while True:
+    #             try:
+    #                 for tweet in tweets:
+    #                     if len(topic_tweets) < number_of_tweets:
+    #                         curr_tweet = {
+    #                             'id': tweet.id,
+    #                             'text': tweet.text,
+    #                             'lang': tweet.lang,
+    #                             'created_at_datetime': tweet.created_at_datetime,
+    #                             'user': tweet.user.screen_name,
+    #                             'quote_count': tweet.quote_count,
+    #                             'favorite_count': tweet.favorite_count,
+    #                             'reply_count': tweet.reply_count,
+    #                             'country' : tweet.user.location
+    #                         }
+    #                         all_tweets.append(curr_tweet)
+    #                     else:
+    #                         break
+    #                 if len(all_tweets) >= number_of_tweets:
+    #                     break
+    #                 tweets = tweets.next()
+    #             except:
+    #                 retry_after = 100
+    #                 print(f"Rate limit hit. Pausing for {retry_after} seconds.")
+    #                 time.sleep(retry_after)
+    #     return all_tweets
+
+    @task
+    def extract_tweets_from_json():
+        try:
+            with open('/opt/airflow/dags/Trump.json', 'r') as file1:
+                data1 = json.load(file1)
+            
+            with open('/opt/airflow/dags/Biden.json', 'r') as file2:
+                data2 = json.load(file2)
+            
+            curr_list = data1 + data2
+            seen_ids = set()
+            unique_tweets = []
+            for tweet in curr_list:
+                if tweet['id'] not in seen_ids:
+                    seen_ids.add(tweet['id'])
+                    # Convert 'created_at' to datetime, accounting for timezone
+                    tweet['created_at_datetime'] = datetime.strptime(tweet['created_at_datetime'], '%Y-%m-%d %H:%M:%S%z')  # Adjust format as necessary
+                    unique_tweets.append(tweet)
+            logging.info(len(unique_tweets))
+            return unique_tweets
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            return []
     
     @task
     def get_existing_ids():
@@ -204,12 +238,14 @@ def twitter_scrape_etl_bigquery_incremental():
 
         print(f"Loaded {job.output_rows} rows into {table_id}")
 
-    search_terms = ["US Elections", "biden", "trump"]
-    raw_data = extract_tweets_n(100, search_terms)
+    # search_terms = ["US Elections", "biden", "trump"]
+    # raw_data = extract_tweets_n(100, search_terms)
+    raw_data = extract_tweets_from_json()
     processed_data = transform_tweets(raw_data)
     existing_ids = get_existing_ids()
     new_data = filter_new_data(processed_data, existing_ids)
-    load_data_to_bigquery(new_data)
+    load = load_data_to_bigquery(new_data)
+    raw_data >> processed_data >> existing_ids >> new_data >> load
 
 # Instantiate the DAG
 twitter_scrape_etl_bigquery_incremental_dag = twitter_scrape_etl_bigquery_incremental()
