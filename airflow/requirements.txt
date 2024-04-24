@@ -1,1 +1,10 @@
-pandas
+pandas 
+matplotlib 
+seaborn 
+kaggle 
+reportlab 
+praw 
+nltk 
+geopy 
+twikit 
+pynytimes
