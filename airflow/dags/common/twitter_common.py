@@ -1,5 +1,6 @@
 import re
 import time
+from airflow.models import Variable
 def classify_topic(text):
     trump_keywords = [
         'trump', 'donald', 'donald trump', 'president trump', 'trump administration',
@@ -36,9 +37,9 @@ def extract_helper(number_of_tweets,search_terms):
     #Change Credentials
     client = Client('en-US')
     client.login(
-        auth_info_1="lions_jam92904",
-        auth_info_2="lionsjam75@gmail.com",
-        password="123qwe456")
+        auth_info_1=Variable.get("TWITTER_USERNAME"),
+        auth_info_2=Variable.get("TWITTER_EMAIL"),
+        password=Variable.get("TWITTER_PASSWORD"))
     search_terms = ['Trump' , 'Biden']
     all_tweets = []
     for term in search_terms:

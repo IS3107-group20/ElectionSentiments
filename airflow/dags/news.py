@@ -13,8 +13,10 @@ import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
 from common.helper import bq_load_data, extract_aspects, get_existing_ids_by_source, update_topic_sentiment
 from common.news_common import calculate_row_checksum, classify_topic, clean_text, classify_sentiment
+from airflow.models import Variable
 
-apikey = "jp8j36ahTYcAE3AskMXyvOH0Gx9nrmch" 
+
+apikey = Variable.get("NEWS_API_KEY")
 
 
 nltk.download('vader_lexicon')

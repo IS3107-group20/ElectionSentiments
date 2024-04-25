@@ -12,7 +12,7 @@ import re
 import numpy as np
 from common.helper import bq_load_data, extract_aspects, get_existing_ids_by_source, update_topic_sentiment
 from common.reddit_common import determine_topic, clean_and_lemmatize, classify_sentiment
-
+from airflow.models import Variable
 # Default arguments for the DAG
 default_args = {
     "owner": "airflow",
@@ -28,9 +28,9 @@ default_args = {
 def reddit_scrape_etl_bigquery_incremental():
 
     def get_reddit_client():
-        return praw.Reddit(client_id='9Vy8b4OZfZhDHn0bD4Q94w', 
-                           client_secret='h-JRuPyJJBWrWT8qnrt9PCL2V39RbA', 
-                           user_agent='is3107')
+        return praw.Reddit(client_id=Variable.get("REDDIT_CLIENT_ID"), 
+                           client_secret=Variable.get("REDDIT_CLIENT_SECRET"), 
+                           user_agent=Variable.get("REDDIT_USER_AGENT"))
 
     @task
     def get_reddit_data():
