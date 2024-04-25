@@ -7,10 +7,10 @@ START TRANSACTION;
 
 -- Insert new Posts into Posts Table
 
-INSERT INTO reddit.Posts (Id, favourites, comment_count, Body, Title, platform)
-SELECT rs.id, rs.score, rs.num_comments, rs.body, rs.title, 'Reddit'
+INSERT INTO reddit.Posts (Id, created_timestamp, favourites, comment_count, Body, Title, platform)
+SELECT rs.id,CAST(rs.created AS TIMESTAMP), rs.score, rs.num_comments, rs.body, rs.title, 'Reddit'
 FROM (
-    SELECT id, score, num_comments, body, title,
+    SELECT id, created,score,  num_comments, body, title,
            ROW_NUMBER() OVER (PARTITION BY id ORDER BY id) AS rn
     FROM reddit.reddit_scraped
 ) AS rs
@@ -18,10 +18,10 @@ WHERE rs.rn = 1 AND NOT EXISTS (
     SELECT 1 FROM reddit.Posts p WHERE p.Id = rs.id
 );
 
-INSERT INTO reddit.Posts (Id, Body, Title, keywords, platform)
-SELECT ns.checksum, ns.cleaned_text, ns.headline, ns.keywords, 'News'
+INSERT INTO reddit.Posts (Id,created_timestamp, Body, Title, keywords, platform)
+SELECT ns.checksum,TIMESTAMP(ns.publication_date), ns.cleaned_text, ns.headline, ns.keywords, 'News'
 FROM (
-    SELECT checksum, cleaned_text, headline, keywords,
+    SELECT checksum,publication_date, cleaned_text, headline, keywords,
            ROW_NUMBER() OVER (PARTITION BY checksum ORDER BY checksum) AS rn
     FROM reddit.news_scraped
 ) AS ns
@@ -29,10 +29,10 @@ WHERE ns.rn = 1 AND NOT EXISTS (
     SELECT 1 FROM reddit.Posts p WHERE p.Id = ns.checksum
 );
 
-INSERT INTO reddit.Posts (Id, favourites, comment_count, Location, Body, platform)
-SELECT ts.id, ts.favorite_count, ts.reply_count, ts.point, ts.text, 'Twitter'
+INSERT INTO reddit.Posts (Id,created_timestamp,favourites, comment_count, Location, Body, platform)
+SELECT ts.id,TIMESTAMP(ts.created_at_datetime),ts.favorite_count, ts.reply_count, ts.point, ts.text, 'Twitter'
 FROM (
-    SELECT id, favorite_count, reply_count, point, text,
+    SELECT id, created_at_datetime,favorite_count, reply_count, point, text,
            ROW_NUMBER() OVER (PARTITION BY id ORDER BY id) AS rn
     FROM reddit.twitter_scraped
 ) AS ts
