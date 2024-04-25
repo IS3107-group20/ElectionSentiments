@@ -1,5 +1,6 @@
 import json
 import numpy as np
+import time
 import pandas as pd
 from airflow.decorators import dag, task
 from datetime import datetime, timedelta
@@ -30,40 +31,49 @@ def twitter_scrape_etl_bigquery_incremental():
     
     @task
     def extract_tweets_n(number_of_tweets: int, search_terms: list):
-        from twikit import Client
+        from twikit import Client,errors
         #Change Credentials
         client = Client('en-US')
         client.login(
-        auth_info_1="ispet797655",
-        auth_info_2="isthreeone994@gmail.com.",
-        password="123abc456def")
-        
+            auth_info_1="lions_jam92904",
+            auth_info_2="lionsjam75@gmail.com",
+            password="123qwe456")
+        search_terms = ['Trump' , 'Biden']
         all_tweets = []
         for term in search_terms:
-            tweets = client.search_tweet(term, 'Top')
-            topic_tweets=[]
             while True:
                 try:
-                    for tweet in tweets:
-                        if len(topic_tweets) < number_of_tweets:
-                            curr_tweet = {
-                                'id': tweet.id,
-                                'text': tweet.text,
-                                'lang': tweet.lang,
-                                'created_at_datetime': tweet.created_at_datetime,
-                                'user': tweet.user.screen_name,
-                                'quote_count': tweet.quote_count,
-                                'favorite_count': tweet.favorite_count,
-                                'reply_count': tweet.reply_count,
-                                'country' : tweet.user.location
-                            }
-                            all_tweets.append(curr_tweet)
-                        else:
-                            break
-                    if len(all_tweets) >= number_of_tweets:
-                        break
-                    tweets = tweets.next()
-                except:
+                    tweets = client.search_tweet(term, 'Top')
+                    topic_tweets=[]
+                    while True:
+                        try:
+                            for i, tweet in enumerate(tweets):
+                                if len(topic_tweets) < number_of_tweets:
+                                    curr_tweet = {
+                                        'id': tweet.id,
+                                        'text': tweet.text,
+                                        'lang': tweet.lang,
+                                        'created_at_datetime': tweet.created_at_datetime,
+                                        'user': tweet.user.screen_name,
+                                        'quote_count': tweet.quote_count,
+                                        'favorite_count': tweet.favorite_count,
+                                        'reply_count': tweet.reply_count,
+                                        'country' : tweet.user.location
+                                    }
+                                    topic_tweets.append(curr_tweet)
+                                else:
+                                    break
+                            if len(topic_tweets) >= number_of_tweets:
+                                break
+                            tweets = tweets.next()
+                        except errors.TooManyRequests as e:
+                            retry_after = 100
+                            print(f"Rate limit hit. Pausing for {retry_after} seconds.")
+                            time.sleep(retry_after)
+                    all_tweets += topic_tweets
+                    print("All Tweets Length: ", len(all_tweets))
+                    break
+                except errors.TooManyRequests as e:
                     retry_after = 100
                     print(f"Rate limit hit. Pausing for {retry_after} seconds.")
                     time.sleep(retry_after)
@@ -140,6 +150,7 @@ def twitter_scrape_etl_bigquery_incremental():
             return aspect_sentiments
 
         tweets_df = pd.DataFrame(all_tweets)
+        tweets_df = tweets_df.drop_duplicates(subset='id')
         tweets_df['cleaned_text'] = tweets_df['text'].apply(tweet_cleaning)
         tweets_df['topic'] = tweets_df['cleaned_text'].apply(classify_topic)
         tweets_df['sentiment_score'] = tweets_df['cleaned_text'].apply(lambda text: sia.polarity_scores(text)['compound'])
@@ -215,9 +226,8 @@ def twitter_scrape_etl_bigquery_incremental():
 
         print(f"Loaded {job.output_rows} rows into {table_id}")
 
-    # search_terms = ["US Elections", "biden", "trump"]
-    # raw_data = extract_tweets_n(100, search_terms)
-    raw_data = extract_tweets_from_json()
+    search_terms = ["US Elections", "biden", "trump"]
+    raw_data = extract_tweets_n(100, search_terms)
     processed_data = transform_tweets(raw_data)
     existing_ids = get_existing_ids()
     new_data = filter_new_data(processed_data, existing_ids)

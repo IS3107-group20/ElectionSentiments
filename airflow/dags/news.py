@@ -80,7 +80,7 @@ def classify_sentiment(score):
             return 'Neutral'
 
 @dag(
-    dag_id="news_dag",
+    dag_id="news_scrape",
     default_args={
         "owner": "airflow",
         "start_date": datetime(2023, 12, 4),
@@ -94,7 +94,7 @@ def classify_sentiment(score):
     start_date=datetime(2024, 2, 28),
     dagrun_timeout=timedelta(minutes=5),
     catchup=False,
-    tags=["news"],
+    tags=["news", "bigquery"],
     description="DAG to scrape and retrieve data from news API and load to BigQuery"
 )
 def news_scrape_etl_bigquery_incremental():
