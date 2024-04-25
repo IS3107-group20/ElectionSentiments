@@ -145,9 +145,9 @@ def reddit_scrape_etl_bigquery_incremental():
 
 
         # apply to df
-        df['cleaned text'] = df.apply(lambda x: clean_and_lemmatize(x['title'] + " " + x['body']), axis=1)
-        df['topic'] = df.apply(lambda row: determine_topic(row['cleaned text'], row['title']), axis=1)
-        df['sentiment_score'] = df['cleaned text'].apply(analyze_sentiment)
+        df['cleaned_text'] = df.apply(lambda x: clean_and_lemmatize(x['title'] + " " + x['body']), axis=1)
+        df['topic'] = df.apply(lambda row: determine_topic(row['cleaned_text'], row['title']), axis=1)
+        df['sentiment_score'] = df['cleaned_text'].apply(analyze_sentiment)
         df['aspect_sentiments'] = df.apply(lambda row: extract_aspects(row['cleaned_text']) if row['topic'] == 'Both' else np.nan,axis=1)
         df['sentiment'] = df['sentiment_score'].apply(classify_sentiment)
 
