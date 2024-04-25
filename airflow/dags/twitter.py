@@ -1,4 +1,5 @@
 import json
+import numpy as np
 import pandas as pd
 from airflow.decorators import dag, task
 from datetime import datetime, timedelta
@@ -143,8 +144,8 @@ def twitter_scrape_etl_bigquery_incremental():
         tweets_df['topic'] = tweets_df['cleaned_text'].apply(classify_topic)
         tweets_df['sentiment_score'] = tweets_df['cleaned_text'].apply(lambda text: sia.polarity_scores(text)['compound'])
         tweets_df['sentiment'] = tweets_df['sentiment_score'].apply(lambda score: 'Positive' if score >= 0.05 else 'Negative' if score <= -0.05 else 'Neutral')
-        tweets_df['point'] = tweets_df['country'].apply(geocode).apply(lambda loc: f"POINT({loc.longitude} {loc.latitude})" if loc else None)
-        tweets_df['aspect_sentiments'] = tweets_df['cleaned_text'].apply(extract_aspects)
+        tweets_df['point'] = tweets_df['country'].apply(lambda country: geocode(country) if pd.notna(country) and country.strip() != "" else None).apply(lambda loc: f"POINT({loc.longitude} {loc.latitude})" if loc else None)
+        tweets_df['aspect_sentiments'] = tweets_df.apply(lambda row: extract_aspects(row['cleaned_text']) if row['topic'] == 'Both' else np.nan,axis=1)
 
         # Update topics based on aspect sentiments
         def get_max_sentiment(sentiments):

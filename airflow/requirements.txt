@@ -11,3 +11,4 @@ pynytimes
 transformers 
 torch
 sentencepiece
+numpy

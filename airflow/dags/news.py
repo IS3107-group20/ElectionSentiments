@@ -4,6 +4,7 @@ from airflow.decorators import dag, task
 from pynytimes import NYTAPI
 import pandas as pd
 import hashlib
+import numpy as np
 import json
 import re
 from google.cloud import bigquery
@@ -143,7 +144,7 @@ def news_scrape_etl_bigquery_incremental():
         df = pd.DataFrame(data)
         df['sentiment'] = df['sentiment_score'].apply(classify_sentiment)
         df['topic'] = df['keywords'].apply(classify_topic)
-        df['aspect_sentiments'] = df['cleaned_text'].apply(extract_aspects)
+        df['aspect_sentiments'] = df.apply(lambda row: extract_aspects(row['cleaned_text']) if row['topic'] == 'Both' else np.nan,axis=1)
         
         # Update topics based on aspect sentiments
         def get_max_sentiment(sentiments):
