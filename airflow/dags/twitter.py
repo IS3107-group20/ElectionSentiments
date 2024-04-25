@@ -226,7 +226,7 @@ def twitter_scrape_etl_bigquery_incremental():
 
         print(f"Loaded {job.output_rows} rows into {table_id}")
 
-    search_terms = ["US Elections", "biden", "trump"]
+    search_terms = ["US Elections 2024", "biden", "trump"]
     raw_data = extract_tweets_n(100, search_terms)
     processed_data = transform_tweets(raw_data)
     existing_ids = get_existing_ids()
