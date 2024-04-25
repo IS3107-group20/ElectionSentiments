@@ -11,73 +11,18 @@ from google.cloud import bigquery
 from airflow.providers.google.cloud.hooks.bigquery import BigQueryHook
 import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
-import torch.nn.functional as F
+from common.helper import bq_load_data, extract_aspects, get_existing_ids_by_source, update_topic_sentiment
+from common.news_common import calculate_row_checksum, classify_topic, clean_text, classify_sentiment
 
 apikey = "jp8j36ahTYcAE3AskMXyvOH0Gx9nrmch" 
+
 
 nltk.download('vader_lexicon')
 sia = SentimentIntensityAnalyzer()
 
-def json_serial(obj):
-    """JSON serializer for objects not serializable by default json code"""
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    raise TypeError("Type not serializable")
-
-def calculate_row_checksum(row):
-    """Calculate a checksum for a row to identify unique articles"""
-    row_str = json.dumps(row, default=json_serial, sort_keys=True)
-    checksum = hashlib.md5(row_str.encode()).hexdigest()
-    return checksum
-
-def clean_text(text):
-    """Clean text by removing URLs, special characters, and normalizing whitespace"""
-    text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
-    text = re.sub(r'@\w+', '', text)
-    text = re.sub(r'#', '', text)
-    text = re.sub(r'RT[\s]+', '', text)
-    text = re.sub(r"[^a-zA-Z\s]", ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip().lower()
-    return text
-
-def classify_topic(keywords_str):
-    # Normalize the string by converting to lowercase and splitting on semicolon
-    # and strip spaces to ensure consistent keyword matching.
-    keywords_list = [keyword.strip().lower() for keyword in keywords_str.split(';')]
-    
-    trump_keywords = {
-        'trump', 'donald', 'donald trump', 'president trump', 'trump administration',
-        'trump campaign', 'trump era', 'ivanka', 'melania', 'trump policies', 'maga',
-        'make america great again', 'trump supporter', 'trump rally', 'trump impeachment'
-    }
-    biden_keywords = {
-        'biden', 'joe', 'joe biden', 'president biden', 'biden administration',
-        'biden campaign', 'biden era', 'hunter biden', 'jill biden', 'biden policies',
-        'build back better', 'biden supporter', 'biden rally', 'biden impeachment'
-    }
-
-    # Simplified keyword matching for broader matches
-    trump_count = sum(any(tk in keyword for tk in trump_keywords) for keyword in keywords_list)
-    biden_count = sum(any(bk in keyword for bk in biden_keywords) for keyword in keywords_list)
-
-    if trump_count > biden_count:
-        return 'Trump'
-    elif biden_count > trump_count:
-        return 'Biden'
-    return 'Both' if trump_count > 0 and biden_count > 0 else 'None'
-
 def analyze_sentiment(text):
     """Analyze the sentiment of the text and return the compound sentiment score"""
     return sia.polarity_scores(text)['compound']
-
-def classify_sentiment(score):
-        if score >= 0.05:
-            return 'Positive'
-        elif score <= -0.05:
-            return 'Negative'
-        else:
-            return 'Neutral'
 
 @dag(
     dag_id="news_scrape",
@@ -126,62 +71,24 @@ def news_scrape_etl_bigquery_incremental():
             "checksum": [calculate_row_checksum(article) for article in articles]
         }
         
-        absa_tokenizer = AutoTokenizer.from_pretrained("yangheng/deberta-v3-base-absa-v1.1")
-        absa_model = AutoModelForSequenceClassification.from_pretrained("yangheng/deberta-v3-base-absa-v1.1")
-        
-        def extract_aspects(text):
-            aspects = ['trump', 'biden'] 
-            aspect_sentiments = {}
-            if text.strip():
-                for aspect in aspects:
-                    inputs = absa_tokenizer(f"[CLS] {text} [SEP] {aspect} [SEP]", return_tensors="pt")
-                    outputs = absa_model(**inputs)
-                    probs = F.softmax(outputs.logits, dim=1)
-                    probs = probs.detach().numpy()[0]
-                    aspect_sentiments[aspect] = {label: prob for prob, label in zip(probs, ["negative", "neutral", "positive"])}
-            return aspect_sentiments
-        
         df = pd.DataFrame(data)
         df['sentiment'] = df['sentiment_score'].apply(classify_sentiment)
         df['topic'] = df['keywords'].apply(classify_topic)
         df['aspect_sentiments'] = df.apply(lambda row: extract_aspects(row['cleaned_text']) if row['topic'] == 'Both' else np.nan,axis=1)
         
         # Update topics based on aspect sentiments
-        def get_max_sentiment(sentiments):
-            max_sentiment = max(sentiments, key=sentiments.get)
-            max_score = sentiments[max_sentiment]
-            return max_sentiment, max_score
-
-        new_rows = []
-
-        for index, row in df.iterrows():
-            if row['topic'] == 'Both':
-                for aspect, sentiments in row['aspect_sentiments'].items():
-                    max_sentiment, max_score = get_max_sentiment(sentiments)
-                    new_row = row.copy()
-                    new_row['topic'] = 'Trump' if aspect == 'trump' else 'Biden'
-                    new_row['sentiment'] = max_sentiment
-                    new_row['sentiment_score'] = max_score
-                    new_rows.append(new_row)
-            else:
-                new_rows.append(row)
+        new_rows = update_topic_sentiment(df)
 
         new_df = pd.DataFrame(new_rows)
         new_df = new_df.drop('aspect_sentiments', axis = 1)
         new_df = new_df.reset_index(drop=True)
-
+        new_df['sentiment'] = new_df['sentiment'].str.lower()
+        new_df['topic'] = new_df['topic'].str.lower()
         return new_df
     
     @task
     def get_existing_ids():
-        bigquery_conn_id = 'google_cloud_default'
-        hook = BigQueryHook(bigquery_conn_id=bigquery_conn_id, use_legacy_sql=False)
-        client = bigquery.Client(credentials=hook.get_credentials(), project=hook.project_id)
-        query = "SELECT checksum FROM `is3107-project-419009.reddit.news_scraped`"
-        query_job = client.query(query)
-        results = query_job.result()
-        existing_ids = {row.checksum for row in results}
-        return existing_ids
+        return get_existing_ids_by_source("news_scraped")
 
     @task
     def filter_new_data(df, existing_ids):
@@ -189,35 +96,22 @@ def news_scrape_etl_bigquery_incremental():
 
     @task
     def load_data_to_bigquery(df):
-        bigquery_conn_id = 'google_cloud_default'
-        hook = BigQueryHook(bigquery_conn_id=bigquery_conn_id, use_legacy_sql=False)
-        client = hook.get_client()
-        dataset_id = "reddit"
-        table_id = "news_scraped"
-
-        job_config = bigquery.LoadJobConfig(
-            schema=[
+        schema=[
                 bigquery.SchemaField("headline", "STRING"),
                 bigquery.SchemaField("author", "STRING"),
                 bigquery.SchemaField("lead_paragraph", "STRING"),
                 bigquery.SchemaField("snippet", "STRING"),
                 bigquery.SchemaField("source", "STRING"),
-                bigquery.SchemaField("publication_date", "DATE"),
+                bigquery.SchemaField("publication_date", "TIMESTAMP"),
                 bigquery.SchemaField("keywords", "STRING"),
                 bigquery.SchemaField("topic", "STRING"),
                 bigquery.SchemaField("checksum", "STRING", description="Primary Key"),
                 bigquery.SchemaField("cleaned_text", "STRING"),
                 bigquery.SchemaField("sentiment_score", "FLOAT"),
                 bigquery.SchemaField("sentiment", "STRING"),
-            ],
-            write_disposition=bigquery.WriteDisposition.WRITE_APPEND
-        )
+            ]
+        bq_load_data(df,schema, "reddit.news_scraped")
 
-        table_ref = f"{hook.project_id}.{dataset_id}.{table_id}"
-        job = client.load_table_from_dataframe(df, table_ref, job_config=job_config)
-        job.result()
-        print(f"Loaded {job.output_rows} rows into {table_ref}")
-        
     @task
     def combine_and_load(df1, df2):
         return pd.concat([df1, df2], axis=0)
