@@ -136,6 +136,7 @@ Once you have the keyfile, add a new connection in Airflow with the following de
 #### Step 6: Trigger the DAG
 
 You should see these 3 dags in the Airflow UI:
+
 ![dag](img/dag.png).
 
 Unpause the dags and these dags will run daily
