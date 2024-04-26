@@ -148,7 +148,7 @@ The above DAG will load the data into staging BigQuery Tables. To move them to o
 
 #### Step 8: Configure your tableau to show the necessary visualizations
 
-Connect your tablaeu to BigQuery and create the necessary visualizations.
+Connect your tableau to BigQuery and create the necessary visualizations.
 
 ## Conclusion
 
